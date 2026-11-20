@@ -1,0 +1,560 @@
+import React, { useEffect, useState } from "react";
+import { addDays, format } from "date-fns";
+import { useNavigate } from "react-router-dom";
+import { 
+  User, Phone, MapPin, ShoppingCart, 
+  CheckCircle2, ChevronLeft, ArrowRight, ShieldCheck, 
+  X, Calendar, CreditCard, Sparkles, AlertTriangle, ShoppingBag, Tag, Check
+} from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import UserMap from "@/components/UserMap";
+
+const InputField = ({ label, type = "text", value, onChange, error, placeholder, icon: Icon, disabled }) => (
+  <div className="space-y-2">
+    <label className="text-[10px] font-[1000] text-[#8D788D] uppercase tracking-[0.15em] ml-2">
+      {label}
+    </label>
+    <div className={`
+      relative flex items-center bg-[#fbfcfa] rounded-2xl border-2 transition-all duration-300
+      ${error ? "border-rose-200 bg-rose-50/30" : "border-[#f1f3eb] focus-within:border-[#C2306B] focus-within:bg-white focus-within:shadow-xl focus-within:shadow-[#C2306B]/5"}
+    `}>
+      {Icon && (
+        <div className="pl-5 text-[#C2306B] opacity-40">
+          <Icon size={18} />
+        </div>
+      )}
+      <input
+        type={type}
+        value={value}
+        onChange={onChange}
+        placeholder={placeholder}
+        disabled={disabled}
+        className="w-full px-5 py-5 bg-transparent text-sm font-[1000] text-[#2B1B2E] outline-none placeholder:text-gray-300 disabled:text-gray-300 uppercase tracking-tight"
+      />
+    </div>
+    {error && (
+      <motion.p initial={{ opacity: 0, y: -5 }} animate={{ opacity: 1, y: 0 }} className="text-[#C2306B] text-[9px] font-black uppercase pl-2 tracking-widest">
+        {error}
+      </motion.p>
+    )}
+  </div>
+);
+
+export default function CheckoutPage() {
+  const navigate = useNavigate();
+  const [user, setUser] = useState(null);
+  const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [cart, setCart] = useState([]);
+  const [showMap, setShowMap] = useState(false);
+  const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState("PAY_AFTER_SERVICE");
+
+  // Form States
+  const [name, setName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [address, setAddress] = useState("");
+  const [loginPhone, setloginPhone] = useState("");
+  const [pincode, setPincode] = useState("143001");
+  const [date, setDate] = useState("");
+  const [timeSlot, setTimeSlot] = useState("");
+  const [errors, setErrors] = useState({});
+  const [orderSuccess, setOrderSuccess] = useState(false);
+  const [showSlotPicker, setShowSlotPicker] = useState(false);
+  const [orderId, setOrderId] = useState("");
+  const [showReferralInput, setShowReferralInput] = useState(false);
+  const [referralCode, setReferralCode] = useState("");
+  const [referralError, setReferralError] = useState("");
+  const [referralDiscount, setReferralDiscount] = useState(0);
+
+  const isRecipientValid = name.trim().length > 0 && /^\d{10}$/.test(phone);
+
+  const [outOfBounds, setOutOfBounds] = useState(false);
+  const [pendingLocation, setPendingLocation] = useState(null);
+
+  const AMRITSAR_BOUNDS = [
+    { lat: 31.670068, lng: 74.862815 },
+    { lat: 31.657253, lng: 74.919065 },
+    { lat: 31.596597, lng: 74.877805 },
+    { lat: 31.630555, lng: 74.779767 },
+  ];
+
+  const isInsidePolygon = (point, polygon) => {
+    let inside = false;
+    for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+      const xi = polygon[i].lat, yi = polygon[i].lng;
+      const xj = polygon[j].lat, yj = polygon[j].lng;
+      const intersect =
+        yi > point.lng !== yj > point.lng &&
+        point.lat < ((xj - xi) * (point.lng - yi)) / (yj - yi) + xi;
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  };
+
+  const checkAmritsar = (lat, lng) => {
+    if (!lat || !lng) return false;
+    const inside = isInsidePolygon({ lat, lng }, AMRITSAR_BOUNDS);
+    setOutOfBounds(!inside);
+    return inside;
+  };
+
+  const UPI_ID = "sparkyservices.in@okaxis";
+  const BRAND_NAME = "SPARKY";
+
+  const applyReferralCode = () => {
+    const validCoupons = ["SP1852", "SP2633", "SP3677"];
+    const code = referralCode.trim().toUpperCase();
+
+    if (!validCoupons.includes(code)) {
+      setReferralError("Invalid Coupon Code");
+      setReferralDiscount(0);
+      return;
+    }
+
+    setReferralError("");
+    setReferralDiscount(50);
+  };
+
+  const subtotal = cart.reduce((sum, item) => sum + item.price * (item.quantity || 1), 0);
+  const total = Math.max(0, subtotal - referralDiscount);
+
+  const startUpiPayment = () => {
+    const upiUrl =
+      `upi://pay?pa=${UPI_ID}` +
+      `&pn=${encodeURIComponent(BRAND_NAME)}` +
+      `&am=${total.toFixed(0)}` +
+      `&cu=INR`;
+    window.location.href = upiUrl;
+  };
+
+  useEffect(() => {
+    fetch("/api/me")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data?.user) {
+          setUser(data.user);
+          setName(data.user.name || "");
+          setPhone(data.user.phone || "");
+          setloginPhone(data.user.phone || "");
+        }
+      })
+      .catch(() => {});
+
+    const saved = localStorage.getItem("cart");
+    if (saved) setCart(JSON.parse(saved));
+
+    const savedAddr = localStorage.getItem("user_address_text");
+    if (savedAddr) setAddress(savedAddr);
+  }, []);
+
+  const handleConfirm = async () => {
+    if (!isRecipientValid || !address || !cart.length || !date || !timeSlot) return;
+    setIsPlacingOrder(true);
+    const formattedCart = cart.map(item => ({
+      name: item.title || item.name,
+      price: item.price,
+      quantity: item.quantity || 1,
+      category: item.category,
+      earning: item.earning,
+      profit: item.profit
+    }));
+
+    try {
+      const res = await fetch("/api/orders", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cart: formattedCart, subtotal, discount: referralDiscount, total,
+          customerName: name, loginPhone, phone, address, pincode,
+          coupon: referralCode.toUpperCase() || "NULL",
+          date, timeSlot,
+          paymentMethod: paymentMethod === "UPI" ? "UPI (SPARKY)" : "Pay After Service",
+          status: "pending",
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Order placement failed");
+      setOrderSuccess(true);
+      setOrderId(data.orderId);
+      localStorage.removeItem("cart");
+    } catch (err) {
+      alert("Error placing order: " + err.message);
+    } finally {
+      setIsPlacingOrder(false);
+    }
+  };
+
+  const next5Days = Array.from({ length: 5 }, (_, i) => addDays(new Date(), i));
+  const slots = ["09:00 AM", "10:00 AM", "11:00 AM", "12:00 PM", "01:00 PM", "02:00 PM", "03:00 PM", "04:00 PM", "05:00 PM"];
+
+  const getAvailableSlots = () => {
+    if (!date) return slots;
+    const today = format(new Date(), "yyyy-MM-dd");
+    if (date !== today) return slots;
+    const now = new Date();
+    const oneHourLater = new Date(now.getTime() + 60 * 60 * 1000);
+    return slots.filter((slot) => {
+      const slotDateTime = new Date(`${date} ${slot}`);
+      return slotDateTime > oneHourLater;
+    });
+  };
+
+  return (
+    <div className="min-h-screen bg-[#FFF7F3] text-[#2B1B2E] pb-44 font-sans selection:bg-[#C2306B]/20">
+      {/* 3D HEADER */}
+      <header className="relative z-20 px-5 pt-4 pb-10 rounded-b-[2.5rem] bg-gradient-to-br from-[#1A2F25] via-[#2E4236] to-[#26352C] shadow-[0_15px_40px_rgba(0,0,0,0.18)] overflow-hidden">
+        <div className="absolute -top-10 -right-10 w-32 h-32 bg-white/5 blur-3xl rounded-full" />
+        <div className="absolute -bottom-12 -left-10 w-32 h-32 bg-black/20 blur-2xl rounded-full" />
+
+        <div className="flex items-center justify-between mb-6 relative z-10">
+          <button
+            onClick={() => navigate(-1)}
+            className="btn-icon w-9 h-9 text-white bg-white/10 border-white/20 hover:bg-white/20"
+          >
+            <ArrowRight size={16} className="rotate-180" />
+          </button>
+
+          <h1 className="text-[18px] font-bold tracking-tight text-white">
+            Secure <span className="text-white">Checkout</span>
+          </h1>
+
+          <div className="w-9" />
+        </div>
+
+        <div className="relative z-10 bg-white/8 backdrop-blur-lg rounded-2xl px-4 py-3 border border-white/15 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]">
+          <div className="flex items-center gap-3">
+            <div className="relative w-9 h-9 rounded-xl bg-gradient-to-br from-white to-gray-100 flex items-center justify-center shadow-md">
+              <ShoppingBag size={16} className="text-[#1A2F25]" />
+            </div>
+
+            <div className="leading-tight">
+              <p className="text-white text-[12px] font-semibold tracking-wide">
+                {cart.length} Services Selected
+              </p>
+              <p className="text-white/50 text-[9px] uppercase tracking-widest">
+                Verified Professionals
+              </p>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      {/* MAIN CONTENT */}
+      <main className="max-w-md mx-auto px-5 -mt-6 relative z-30 space-y-6">
+        {/* 1. RECIPIENT CARD */}
+        <section className="bg-white/80 backdrop-blur-md rounded-[2.5rem] p-7 border border-white/60 shadow-[0_15px_40px_rgba(58,77,57,0.06)]">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="p-2 bg-[#C2306B]/5 rounded-xl">
+              <User size={16} className="text-[#C2306B]" />
+            </div>
+            <h2 className="text-[15px] font-bold text-gray-800">Service Recipient</h2>
+          </div>
+
+          <div className="space-y-4">
+            <InputField
+              label="Full Name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              error={errors.name}
+              placeholder="Resident name"
+            />
+            <InputField
+              label="Phone Number"
+              type="tel"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              error={errors.phone}
+              placeholder="10-digit mobile"
+            />
+          </div>
+        </section>
+
+        {/* 2. ORDER LIST CARD */}
+        <section className="bg-white/80 backdrop-blur-md rounded-[2.5rem] p-7 border border-white/60 shadow-[0_15px_40px_rgba(58,77,57,0.06)]">
+          <p className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-400 mb-5">Selected Care</p>
+          <div className="space-y-3">
+            {cart.map((item, index) => (
+              <div key={index} className="flex items-center justify-between py-1">
+                <div>
+                  <p className="text-[13px] font-bold text-gray-900">{item.name || item.title}</p>
+                  <p className="text-[10px] text-gray-400 uppercase font-medium">{item.category}</p>
+                </div>
+                <p className="text-[14px] font-black text-[#C2306B]">₹{item.price}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-6 pt-6 border-t border-dashed border-gray-200 space-y-3">
+            <div className="flex justify-between text-[12px] font-medium text-gray-500">
+              <span>Item Total</span>
+              <span className="text-gray-900">₹{subtotal.toFixed(0)}</span>
+            </div>
+            {referralDiscount > 0 && (
+              <div className="flex justify-between text-[12px] font-medium text-[#C2306B]">
+                <span>Discount</span>
+                <span>-₹{referralDiscount}</span>
+              </div>
+            )}
+            <div className="flex justify-between text-[12px] font-medium text-gray-500">
+              <span>Platform Fee</span>
+              <span className="text-emerald-600 font-bold uppercase text-[10px]">Free</span>
+            </div>
+            <div className="flex justify-between items-end pt-2">
+              <div>
+                <p className="text-[9px] font-black text-gray-400 uppercase tracking-widest">To Pay</p>
+                <p className="text-2xl font-black text-[#1A2F25]">₹{total.toFixed(0)}</p>
+              </div>
+              <div className="bg-[#FCEAF1] px-4 py-2 rounded-2xl flex items-center gap-2">
+                <ShieldCheck size={14} className="text-[#C2306B]" />
+                <span className="text-[9px] font-black text-[#C2306B] uppercase">Secure</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* 3. REFERRAL SECTION */}
+        <section className="px-2">
+          {!showReferralInput ? (
+            <button 
+              onClick={() => setShowReferralInput(true)}
+              className="text-[11px] font-black uppercase tracking-widest text-[#C2306B]/80 hover:text-[#C2306B] flex items-center gap-2 transition-colors"
+            >
+              <Tag size={12} /> Have a Promo Code?
+            </button>
+          ) : (
+            <div className="flex gap-2">
+              <input 
+                value={referralCode} 
+                onChange={(e) => setReferralCode(e.target.value)} 
+                placeholder="ENTER CODE"
+                className="flex-1 bg-white border border-[#F1DFE8] rounded-2xl px-5 py-3 text-xs font-bold uppercase tracking-wider outline-none focus:border-[#C2306B]"
+              />
+              <button onClick={applyReferralCode} className="btn-primary px-6 rounded-2xl text-[10px] font-bold uppercase tracking-widest">Apply</button>
+            </div>
+          )}
+          {referralError && <p className="text-red-500 text-[9px] font-bold mt-2 uppercase px-1">{referralError}</p>}
+        </section>
+      </main>
+
+      {/* STICKY MOBILE ACTION BAR */}
+      <div className="fixed bottom-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-2xl border-t border-gray-100 p-6 pb-10">
+        <div className="max-w-md mx-auto flex items-center gap-4">
+          <div className="flex-1 overflow-hidden cursor-pointer" onClick={() => setShowMap(true)}>
+            <div className="flex items-center gap-2">
+              <MapPin size={12} className={!address ? "text-red-500" : "text-[#C2306B]"} />
+              <span className={`text-[9px] font-black uppercase tracking-widest ${!address ? "text-red-500" : "text-gray-400"}`}>
+                Service Spot
+              </span>
+            </div>
+            <p className={`text-[12px] font-bold truncate mt-0.5 ${!address ? "text-red-500" : "text-gray-900"}`}>
+              {address || "Locate on Map"}
+            </p>
+          </div>
+
+          <button
+            disabled={!address || !isRecipientValid}
+            onClick={() => {
+              if (!isRecipientValid) {
+                setErrors({
+                  name: !name.trim() ? "Required" : "",
+                  phone: !/^\d{10}$/.test(phone) ? "Invalid" : ""
+                });
+                return;
+              }
+              setShowSlotPicker(true);
+            }}
+            className={`
+              h-14 px-8 text-[11px] font-black uppercase tracking-[0.15em] flex items-center gap-3 transition-all
+              ${!address || !isRecipientValid 
+                ? "btn-secondary opacity-50 cursor-not-allowed rounded-2xl" 
+                : "btn-primary rounded-2xl"
+              }
+            `}
+          >
+            <span>Pick Slot</span>
+            <ArrowRight size={16} className="text-white/80" />
+          </button>
+        </div>
+      </div>
+
+      {/* OVERLAYS & MODALS */}
+      <AnimatePresence>
+        {showMap && (
+          <motion.div initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }} className="fixed inset-0 z-[100] bg-white flex flex-col">
+            <div className="absolute top-6 left-6 right-6 z-10 flex justify-between">
+              <button onClick={() => setShowMap(false)} className="btn-icon w-12 h-12 bg-white/95 text-[#C2306B] shadow-xl"><X size={20} /></button>
+            </div>
+            <div className="flex-1 w-full relative">
+              <UserMap setAddress={(addr, lat, lng) => { setAddress(addr); setPendingLocation({ lat, lng }); }} />
+              {outOfBounds && (
+                <div className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-xl flex flex-col items-center justify-center p-8 text-center">
+                  <AlertTriangle size={48} className="text-yellow-500 mb-4" />
+                  <h2 className="text-white font-black text-2xl uppercase italic">Outside Amritsar</h2>
+                  <button onClick={() => setOutOfBounds(false)} className="btn-primary mt-8 px-10 py-4 font-black text-[10px] uppercase rounded-xl">Back</button>
+                </div>
+              )}
+            </div>
+            <div className="p-6 pb-10 bg-white border-t border-gray-100">
+              <button 
+                onClick={() => {
+                  if (pendingLocation && checkAmritsar(pendingLocation.lat, pendingLocation.lng)) {
+                    localStorage.setItem("user_address", JSON.stringify({ address, ...pendingLocation }));
+                    localStorage.setItem("user_address_text", address);
+                    setShowMap(false);
+                  }
+                }}
+                className="btn-primary w-full py-4 rounded-2xl font-bold uppercase tracking-widest text-[11px]"
+              >
+                Confirm Service Location
+              </button>
+            </div>
+          </motion.div>
+        )}
+
+        {(showSlotPicker || showPaymentModal || orderSuccess) && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 bg-[#1A2F25]/60 backdrop-blur-md z-[998]"
+            onClick={() => { setShowSlotPicker(false); setShowPaymentModal(false); }}
+          />
+        )}
+
+        {showSlotPicker && (
+          <motion.div
+            initial={{ y: 80, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 80, opacity: 0 }}
+            transition={{ type: "spring", stiffness: 260, damping: 28 }}
+            className="fixed bottom-0 left-1/2 -translate-x-1/2 w-full max-w-[430px] bg-white rounded-t-[2.5rem] px-5 pt-5 pb-7 z-[999] shadow-[0_-20px_50px_rgba(0,0,0,0.15)]"
+          >
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-6" />
+
+            <h2 className="text-[17px] font-semibold text-gray-900 tracking-tight">
+              Choose Arrival Time
+            </h2>
+            <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1 mb-6">
+              Arrives within 30 mins of slot
+            </p>
+
+            <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+              {next5Days.map((d, i) => {
+                const value = format(d, "yyyy-MM-dd");
+                const isSelected = date === value;
+
+                return (
+                  <button
+                    key={i}
+                    onClick={() => setDate(value)}
+                    className={`min-w-[62px] h-[75px] rounded-2xl border flex flex-col items-center justify-center transition-all text-center ${
+                      isSelected
+                        ? "bg-[#C2306B] text-white border-[#C2306B]"
+                        : "bg-gray-50 text-gray-400 border-gray-100"
+                    }`}
+                  >
+                    <span className="text-[9px] font-semibold uppercase">{format(d, "EEE")}</span>
+                    <span className="text-[16px] font-bold">{format(d, "dd")}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="mt-6 grid grid-cols-3 gap-2">
+              {getAvailableSlots().map((slot, i) => (
+                <button
+                  key={i}
+                  onClick={() => setTimeSlot(slot)}
+                  className={`py-3 rounded-xl border text-[10px] font-semibold transition-all ${
+                    timeSlot === slot
+                      ? "bg-[#C2306B]/10 border-[#C2306B] text-[#C2306B]"
+                      : "bg-gray-50 border-gray-100 text-gray-400"
+                  }`}
+                >
+                  {slot}
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => {
+                if (date && timeSlot) {
+                  setShowSlotPicker(false);
+                  setShowPaymentModal(true);
+                }
+              }}
+              disabled={!date || !timeSlot}
+              className="btn-primary mt-8 w-full h-12 rounded-2xl text-[11px] font-semibold uppercase tracking-widest disabled:opacity-30 disabled:cursor-not-allowed"
+            >
+              Confirm Appointment
+            </button>
+          </motion.div>
+        )}
+
+        {showPaymentModal && (
+          <motion.div
+            initial={{ opacity: 0, y: 40, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 40, scale: 0.96 }}
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[92%] max-w-[380px] bg-white/90 backdrop-blur-2xl rounded-[2rem] shadow-[0_30px_70px_rgba(0,0,0,0.15)] border border-white/60 z-[999] px-6 pt-6 pb-7"
+          >
+            <div className="mb-6">
+              <h2 className="text-[18px] font-semibold tracking-tight text-gray-900">
+                Select Payment
+              </h2>
+              <p className="text-[10px] text-gray-400 uppercase tracking-widest mt-1">
+                100% Secure Transaction
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              {[
+                { name: 'Google Pay', icon: Sparkles, color: 'text-blue-500', method: 'UPI' },
+                { name: 'PhonePe', icon: CreditCard, color: 'text-purple-600', method: 'UPI' },
+                { name: 'Pay after service', icon: ShieldCheck, color: 'text-[#C2306B]', method: 'PAY_AFTER_SERVICE', bg: 'bg-[#F6F8F4]' }
+              ].map((opt, i) => (
+                <button
+                  key={i}
+                  onClick={() => {
+                    setPaymentMethod(opt.method);
+                    setShowPaymentModal(false);
+                    if (opt.method === 'UPI') {
+                      startUpiPayment();
+                    } else {
+                      handleConfirm();
+                    }
+                  }}
+                  className={`w-full flex items-center justify-between rounded-2xl px-4 py-4 text-left border border-gray-100 bg-white transition-all duration-200 active:scale-[0.98] hover:shadow-md ${opt.bg || ""}`}
+                >
+                  <div className="flex items-center gap-3">
+                    <opt.icon size={18} className={opt.color} />
+                    <span className="text-[13px] font-semibold text-gray-800">{opt.name}</span>
+                  </div>
+                  <ArrowRight size={14} className="text-gray-300" />
+                </button>
+              ))}
+            </div>
+
+            <button
+              onClick={() => setShowPaymentModal(false)}
+              className="mt-4 w-full text-[10px] font-semibold uppercase tracking-widest text-[#8D788D] hover:text-[#C2306B] transition"
+            >
+              Cancel
+            </button>
+          </motion.div>
+        )}
+
+        {orderSuccess && (
+          <motion.div initial={{ scale: 0.9, opacity: 0 }} animate={{ scale: 1, opacity: 1 }}
+            className="fixed top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[85%] max-w-sm bg-white rounded-[3rem] p-10 z-[1000] text-center shadow-2xl"
+          >
+            <div className="w-20 h-20 bg-emerald-500 rounded-[2rem] flex items-center justify-center mx-auto mb-6 shadow-xl shadow-emerald-200">
+              <Check size={40} className="text-white" />
+            </div>
+            <h2 className="text-2xl font-black italic mb-2 uppercase">Order Placed</h2>
+            <p className="text-gray-400 text-xs font-medium leading-relaxed mb-8">Your professional has been notified. Booking ID <span className="text-black font-black">#{orderId}</span></p>
+            <button onClick={() => navigate("/")} className="btn-primary w-full py-5 rounded-2xl font-black uppercase tracking-widest text-[11px]">Back to Explore</button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+

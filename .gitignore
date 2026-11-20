@@ -2,6 +2,8 @@
 
 # dependencies
 /node_modules
+client/node_modules
+server/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -13,27 +15,45 @@
 # testing
 /coverage
 
-# next.js
+# builds
+/build
+/dist
+client/dist
+server/dist
 /.next/
 /out/
 
-# production
-/build
+# environment files (STRICTLY IGNORED)
+.env
+.env*
+*.env
+client/.env*
+server/.env*
+server/.env
+client/.env
 
-# misc
-.DS_Store
-*.pem
-*.bak
-*.bak*
+# keep example templates
+!.env.example
+!client/.env.example
+!server/.env.example
 
-# debug
+# logs & debugging
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+server/boot.log
+server/boot.err
 
-# env files (can opt-in for committing if needed)
-.env*
+# system & editor
+.DS_Store
+Thumbs.db
+*.pem
+*.bak
+*.bak*
+.vscode/
+.idea/
 
 # vercel
 .vercel
